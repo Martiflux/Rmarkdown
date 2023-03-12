@@ -1,0 +1,990 @@
+---
+title: "DVF - Réalisations cartographiques (Script 4)"
+author: "Caroff Martin, Laumain Anthony, Levesque Jean-Charles"
+date: "30/11/2022"
+output:
+  html_document:
+    toc: yes
+    toc_float:
+      collapsed: yes
+      smooth_scroll: yes
+    number_sections: true
+  word_document:
+    toc: yes
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = 'C:/Users/antho/OneDrive/Bureau/Script 4')
+```
+
+# LES DONNÉES DVF À UNE ÉCHELLE LOCALE : LES EXEMPLES DE LA COMMUNAUTÉ D'AGGLOMÉRATION DU PAYS BASQUE
+
+Ce script présente toutes les étapes de manipulation de la dimension spatiale des données DVF et propose plusieurs formes de représentations cartographiques de ces données à une échelle locale (une communauté d'agglomération).
+
+## Chargement des packages nécessaires
+
+```{r loading package, warning=FALSE, message = FALSE, error=FALSE, echo=TRUE}
+library(tidyverse) #Manipulation de données
+library(sf) #Manipulation de données spatiales
+library(cartography) #Cartographie thématique
+library(sp) # pour importer des objets ayant une composante spatiale
+library(rgdal) # pour manipuler des objets ayant une composante spatiale
+library(rgeos) # pour calculer des centroides
+library(spdep) # pour calculer l'auto-corrélation spatiale
+library(geoR) # pour calculer le semi-variogramme empirique
+library(spatstat) # pour produire des surfaces lissées
+library(maptools) # pour le traitement cartographique
+library(raster) # pour le traitement de données matricielles
+library(cluster) # pour la CAH
+```
+
+## Import du jeu de données brut
+```{r Import donnees}
+DVF <- read.csv("DVF_Aquit.csv", encoding="UTF-8", stringsAsFactors=FALSE)
+Mutations_Aquit <- st_read("Mutations_Aquit.shp")
+```
+
+## Créer le jeu de données correspondant à l'EPCI
+```{r}
+MutationsBasques <- Mutations_Aquit %>% filter(codeepci == 200067106)
+```
+
+### Création d'un tableau avec les indicateurs immobiliers
+```{r, warning = FALSE}
+RecapBasque <- MutationsBasques %>% group_by(type) %>% 
+  summarise(tot = n (), prixmed = median(prix), prixmoy = mean(prix), surfmed = median(surface), surfmoy = mean(surface), prixm2med = median(prixm2), prixm2moy = mean(prixm2))
+RecapBasque <- RecapBasque %>% mutate(part = (tot/sum(tot)*100))
+print(RecapBasque)
+```
+
+## Exploration des prix et des volumes à l'échelon des IRIS
+### Importer la couche des IRIS et filtrage sur notre territoire d'étude
+```{r chargement des données et création d une liste, warning = FALSE}
+IRIS_France <- st_read("CONTOURS-IRIS.shp")
+Com_EPCI <- st_read("COM_PAYS_BASQUE.shp")
+Com_EPCI <- st_transform(Com_EPCI, 2154)
+Communes_Reg <-  st_read("COMMUNE.shp")
+Espagne <-  st_read("ESPAGNE.shp")
+ContourEPCI <-  st_read("CA_PAYS_BASQUE.shp")
+```
+On vient ensuite filtrer nos iris sur le territoire qui nous intéresse. Pour cela, on créer au préalable une liste des différents code INSEE des communes.
+
+```{r filtrage des Communes de notre EPCI}
+listeCodeComBasque<-unique(Com_EPCI$com_code)
+
+IRISBasque <- IRIS_France %>% filter(INSEE_COM %in% listeCodeComBasque)
+length(unique(IRISBasque$INSEE_COM))
+
+plot(IRISBasque["INSEE_COM"])
+```
+
+### Calculer et cartographier le prix moyen au m² par IRIS
+```{r}
+# Calcul du prix moyen au m² par IRIS
+IRISDVF <- IRISBasque %>% st_join(MutationsBasques) %>% group_by(CODE_IRIS) %>% summarise(Prixm2 = mean(prixm2))
+
+# Sélection des communes dont le nom sera affiché sur la carte 
+liste_noms_Pays_Basque <- c("Biarritz", "Bayonne", "Saint-Jean-de-Luz", "Hendaye", "Espelette", "Saint-Palais", "Saint-Jean-Pied-de-Port", "Trois-Villes")
+Selection_Communes_Pays_Basque <- Com_EPCI[which(Com_EPCI$com_name %in% liste_noms_Pays_Basque),]
+
+# Sélection des communes dont le nom sera affiché sur le carton et l'atlas final
+liste_noms_Pays_Basque_Carton <- c("Biarritz", "Bayonne", "Anglet")
+Selection_Communes_Pays_Basque_Carton <- Com_EPCI[which(Com_EPCI$com_name %in% liste_noms_Pays_Basque_Carton),]
+
+# Paramétrage des marges de la fenêtre pour maximiser l'emprise de la carte
+par(mar = c(0, 0, 1.2, 0))
+
+# Affichage des communes de notre EPCI et celles aux alentours en arrière-plan et centrage de la carte sur le Pays Basque
+plot(st_geometry(Communes_Reg), lwd = 0.1, col = "grey90", border = "white", bg = "lightsteelblue1", xlim = c(st_bbox(IRISBasque)[1], st_bbox(IRISBasque)[3]), ylim = c(st_bbox(IRISBasque)[2], st_bbox(IRISBasque)[4])) 
+
+#Affichage de l'Espagne
+plot(st_geometry(Espagne), lwd = 0.1, col = "grey95", border = "white", add = T)
+
+choroLayer(
+  x = IRISDVF,
+  var = "Prixm2",
+  breaks = c(600, 1500, 2000, 3000, 4000, 8000),
+  col = c("#1a9641", "#a6d96a", "#ffffbf", "#fdae61", "#d7191c"),
+  add=T,
+  border = "grey30",
+  lwd = 0.3,
+  legend.nodata = "Aucune mutation",
+  legend.border = "white",
+  legend.title.txt = "Prix moyen \nau m² (Euros)",
+  legend.title.cex = 0.8)
+
+layoutLayer(title = "Prix moyen au m² de l'immobilier par IRIS au sein de la CA du Pays Basque (2014-2022)", source = "        Auteurs : Caroff M, Laumain A, Levesque J-C ; Sources : IGN et DGFip, 2022", 
+            north = TRUE, horiz = FALSE, tabtitle = TRUE,
+            frame = FALSE, col = "#cdd2d4", coltitle = "#8A5543")
+
+# Ajouter les étiquettes des communes selectionnées plus haut
+labelLayer(Selection_Communes_Pays_Basque, txt = "com_name", halo = TRUE, bg = "white", r = 0.05, cex = 0.55, pos = 3, font = 3, offset = 0, overlap = TRUE)
+
+# Habillage
+mtext(text = "Espagne", 
+      side = 3, line = -22, adj = 0.3, cex = 1, col = "#000004FF")
+
+```
+
+### Calculer et cartographier le nombre de mutations par IRIS
+```{r}
+# Calcul du nombre de mutations par IRIS
+IRISDVF <- IRISDVF %>% mutate(Nbmutations = lengths(st_intersects(IRISDVF, MutationsBasques)))
+IRISDVF <- IRISDVF %>% na.omit() # pour supprimer les valeurs manquantes
+
+# Paramétrage des marges de la fenêtre pour maximiser l'emprise de la carte
+par(mar = c(0, 0, 1.2, 0))
+
+# Affichage des communes de notre EPCI et celles aux alentours en arrière-plan et centrage de la carte sur le Pays Basque
+plot(st_geometry(Communes_Reg), lwd = 0.1, col = "grey90", border = "white", bg = "lightsteelblue1", xlim = c(st_bbox(IRISBasque)[1], st_bbox(IRISBasque)[3]), ylim = c(st_bbox(IRISBasque)[2], st_bbox(IRISBasque)[4])) 
+
+#Affichage de l'Espagne
+plot(st_geometry(Espagne), lwd = 0.1, col = "grey95", border = "white", add = T)
+
+# Affichage des IRIS
+plot(st_geometry(IRISBasque), # appel du jeu de données
+     border = "grey50", # couleur de la bordure des IRIS
+     add = TRUE,
+     lwd = 0.2) 
+
+
+# Affichage des symboles proportionnels (nombre de mutations)
+propSymbolsLayer(x = IRISDVF, # appel du jeu de données
+                 var = "Nbmutations", # appel de la variable à cartographier
+                 col = "red3", # couleur cercles
+                 border = "grey80",  # couleur bordure cercle
+                 lwd = 0.01,
+                 inches = 0.10, # Taille des cercles
+                 add = TRUE,
+                 legend.pos = "n",
+                 ) 
+
+layoutLayer(title = "Nombre de mutations par IRIS au sein de la Communauté d'Agglomération Pays Basque (2014-2022)", source = "        Auteurs : Caroff M, Laumain A, Levesque J-C ; Sources : IGN et DGFip, 2022", north = TRUE, horiz = FALSE, tabtitle = TRUE, frame = FALSE, col = "#cdd2d4", coltitle = "#8A5543")
+
+legendCirclesSymbols(
+  pos = "left",
+  title.txt = "Nombre de \nmutations DVF",
+  title.cex = 0.8,
+  cex = 1,
+  border = "grey80",
+  lwd = 0.01,
+  values.cex = 0.6,
+  var = c(min(IRISDVF$Nbmutations), max(IRISDVF$Nbmutations)),
+  inches = 0.10,
+  col = "red3",
+  frame = FALSE,
+  values.rnd = 0,
+  style = "e"
+)
+
+# Ajouter les étiquettes des communes selectionnées plus haut
+labelLayer(Selection_Communes_Pays_Basque, txt = "com_name", halo = TRUE, bg = "white", r = 0.05, cex = 0.55, pos = 3, font = 3, offset = 0, overlap = TRUE)
+
+
+# Ajout d'un carton focalisé sur Bayonne et Biarritz
+par(fig = c(0.01,0.35,0.01,0.35),
+    mar = c(0,0,0,0),  
+    new = TRUE)
+
+# Centrage de la carte sur Bayonne et Biarritz
+plot(st_geometry(Com_EPCI[Com_EPCI$com_code %in% c("64024", "64102", "64122"),]), 
+     border = "grey80", bg = "lightsteelblue1")
+
+# Affichage des communes de notre EPCI et celles aux alentours en arrière-plan et centrage de la carte sur le Pays Basque
+plot(st_geometry(Communes_Reg), lwd = 0.1, col = "grey90", border = "white", add = T) 
+
+# Affichage des IRIS
+plot(st_geometry(IRISBasque), # appel du jeu de données
+     border = "grey50", # couleur de la bordure des IRIS
+     add = TRUE,
+     lwd = 0.2) 
+
+# Affichage des symboles proportionnels (nombre de mutations)
+propSymbolsLayer(x = IRISDVF, # appel du jeu de données
+                 var = "Nbmutations", # appel de la variable à cartographier
+                 col = "red3", # couleur cercles
+                 border = "grey80",  # couleur bordure cercle
+                 lwd = 0.01,
+                 inches = 0.10, # Taille des cercles
+                 add = TRUE,
+                 legend.pos = "n",
+                 ) 
+
+
+# Affichage de l'échelle et d'un sous-titre
+layoutLayer(title = "", source = "", north = F, horiz = FALSE, 
+            tabtitle = F, frame = FALSE)
+
+mtext(text = "Zoom sur Bayonne et Biarritz", 
+      side = 3, line = 0, adj = 0.7, cex = 0.7, col = "#000004FF")
+
+# Ajouter les étiquettes des communes selectionnées plus haut
+labelLayer(Selection_Communes_Pays_Basque_Carton, txt = "com_name", halo = TRUE, bg = "white", r = 0.05, cex = 0.6, pos = 3, font = 3, offset = 0, overlap = TRUE)
+
+# Ajout d'un cadre autour de la figure
+box(col = "white")
+
+# Habillage
+mtext(text = "Espagne", 
+      side = 3, line = -7, adj = 1.9, cex = 1, col = "#000004FF")
+```
+
+## Exploration des prix et des volumes à l'échelon des sections cadastrales
+
+### Importer la couche des sections cadastrales (DGFip)
+
+```{r}
+Sections <- st_read("sections_ok.shp")
+
+Sections$id <- as.character(Sections$id) 
+SectionsEPCI <- Sections %>% filter(commune %in% listeCodeComBasque) %>% mutate(codesection = id)
+plot(SectionsEPCI["commune"])
+```
+
+### Calculer et cartographier le prix moyen au m² par section cadastrale
+
+```{r, warning=FALSE}
+# Calcul du prix moyen au m² par section
+SectionsDVF <- SectionsEPCI %>% st_join(MutationsBasques) %>% group_by(codesection) %>% summarise(Prixm2 = mean(prixm2))
+SectionsDVF <- SectionsDVF %>% na.omit() # pour supprimer les valeurs manquantes
+
+# Paramétrage des marges de la fenêtre pour maximiser l'emprise de la carte
+par(mar = c(0, 0, 1.2, 0))
+
+# Affichage des communes de notre EPCI et celles aux alentours en arrière-plan et centrage de la carte sur le Pays Basque
+plot(st_geometry(Communes_Reg), lwd = 1, col = "grey90", border = "white", bg = "lightsteelblue1", xlim = c(st_bbox(IRISBasque)[1], st_bbox(IRISBasque)[3]), ylim = c(st_bbox(IRISBasque)[2], st_bbox(IRISBasque)[4])) 
+
+#Affichage de l'Espagne
+plot(st_geometry(Espagne), lwd = 0.1, col = "grey95", border = "white", add = T)
+
+# Affichage de la carte des prix au m² par section cadastrale
+choroLayer(
+  x = SectionsDVF,
+  var = "Prixm2",
+  breaks = c(400, 1500, 2000, 2500, 3000, 30000),
+  col = c("#1a9641", "#a6d96a", "#ffffbf", "#fdae61", "#d7191c"),
+  add = TRUE,
+  border = NA,
+  legend.nodata = "Aucune mutation",
+  legend.border = "white",
+  legend.title.txt = "Prix moyen \nau m² (Euros)",
+  legend.title.cex = 0.8)
+
+
+layoutLayer(title = "Prix moyen au m² de l'immobilier par section cadastrale au sein de la CA Pays Basque (2014-2022)", source ="        Auteurs : Caroff M, Laumain A, Levesque J-C ; Sources : IGN et DGFip, 2022", 
+            north = TRUE, horiz = FALSE, tabtitle = TRUE,
+            frame = FALSE, col = "#cdd2d4", coltitle = "#8A5543")
+
+# Ajouter les étiquettes des communes selectionnées plus haut
+labelLayer(Selection_Communes_Pays_Basque, txt = "com_name", halo = TRUE, bg = "white", r = 0.05, cex = 0.55, pos = 3, font = 3, offset = 0, overlap = TRUE)
+
+mtext(text = "Espagne", 
+      side = 3, line = -22, adj = 0.3, cex = 1, col = "#000004FF")
+```
+
+### Calculer et cartographier le nombre de mutations par section cadastrale
+
+```{r}
+# Calcul du nombre de mutations par section
+SectionsDVF <- SectionsDVF %>% mutate(Nbmutations = lengths(st_intersects(SectionsDVF, MutationsBasques)))
+
+# Paramétrage des marges de la fenêtre pour maximiser l'emprise de la carte
+par(mar = c(0, 0, 1.2, 0))
+
+# Affichage des communes de notre EPCI et celles aux alentours en arrière-plan et centrage de la carte sur le Pays Basque
+plot(st_geometry(Communes_Reg), lwd = 0.1, col = "grey90", border = "white", bg = "lightsteelblue1", xlim = c(st_bbox(IRISBasque)[1], st_bbox(IRISBasque)[3]), ylim = c(st_bbox(IRISBasque)[2], st_bbox(IRISBasque)[4])) 
+
+#Affichage de l'Espagne
+plot(st_geometry(Espagne), lwd = 0.1, col = "grey95", border = "white", add = T)
+
+# Affichage des sections cadastrales
+plot(st_geometry(SectionsDVF), # appel du jeu de données
+     border = "grey75", # couleur de la bordure
+     add = TRUE,
+     lwd = 0.05) 
+
+# Affichage des symboles proportionnels (nombre de mutations)
+propSymbolsLayer(x = SectionsDVF, # appel du jeu de données
+                 var = "Nbmutations", # appel de la variable à cartographier
+                 col = "red3", # couleur cercles
+                 border = "grey80",  # couleur bordure cercle
+                 lwd = 0.01,
+                 inches = 0.08, # Taille des cercles
+                 add = TRUE,
+                 legend.pos = "n",
+                 ) 
+
+layoutLayer(title = "Nombre de mutations par section cadastrale au sein de la CA Pays Basque (2014-2022)", source = "        Auteurs : Caroff M, Laumain A, Levesque J-C ; Sources : IGN et DGFip, 2022", north = TRUE, horiz = FALSE, tabtitle = TRUE, frame = FALSE, col = "#cdd2d4", coltitle = "#8A5543")
+
+
+
+legendCirclesSymbols(
+  pos = "left",
+  title.txt = "Nombre de \nmutations DVF        ",
+  title.cex = 0.8,
+  cex = 1,
+  border = "grey80",
+  lwd = 0.01,
+  values.cex = 0.6,
+  var = c(min(IRISDVF$Nbmutations), max(IRISDVF$Nbmutations)),
+  inches = 0.08,
+  col = "red3",
+  frame = FALSE,
+  values.rnd = 0,
+  style = "e"
+)
+
+# Ajouter les étiquettes des communes selectionnées plus haut
+labelLayer(Selection_Communes_Pays_Basque, txt = "com_name", halo = TRUE, bg = "white", r = 0.05, cex = 0.55, pos = 3, font = 3, offset = 0, overlap = TRUE)
+
+
+# Ajout d'un carton focalisé sur Bayonne et Biarritz
+par(fig = c(0.01,0.35,0.01,0.35),
+    mar = c(0,0,0,0),  
+    new = TRUE)
+
+# Centrage de la carte sur Bayonne et Biarritz
+plot(st_geometry(Com_EPCI[Com_EPCI$com_code %in% c("64024", "64102", "64122"),]), 
+     border = "grey80", bg = "lightsteelblue1")
+
+# Affichage des communes de notre EPCI et celles aux alentours en arrière-plan et centrage de la carte sur le Pays Basque
+plot(st_geometry(Communes_Reg), lwd = 0.1, col = "grey90", border = "white", add = T) 
+
+# Affichage des sections cadastrales
+plot(st_geometry(SectionsDVF), # appel du jeu de données
+     border = "grey75", # couleur de la bordure
+     add = TRUE,
+     lwd = 0.05) 
+
+# Affichage des symboles proportionnels (nombre de mutations)
+propSymbolsLayer(x = SectionsDVF, # appel du jeu de données
+                 var = "Nbmutations", # appel de la variable à cartographier
+                 col = "red3", # couleur cercles
+                 border = "grey80",  # couleur bordure cercle
+                 lwd = 0.01,
+                 inches = 0.08, # Taille des cercles
+                 add = TRUE,
+                 legend.pos = "n",
+) 
+
+# Affichage de l'échelle et d'un sous-titre
+layoutLayer(title = "", source = "", north = F, horiz = FALSE, 
+            tabtitle = F, frame = FALSE)
+
+# Affichage des noms de communes
+labelLayer(Selection_Communes_Pays_Basque_Carton, txt = "com_name", halo = TRUE, bg = "white", r = 0.05, cex = 0.6, pos = 3, font = 3, offset = 0, overlap = TRUE)
+
+mtext(text = "Zoom sur Bayonne", 
+      side = 3, line = 0, adj = 0.7, cex = 0.8, col = "#000004FF")
+
+
+# Ajout un cadre autour de la figure
+box(col = "white")
+
+# Habillage
+mtext(text = "Espagne", 
+      side = 3, line = -7, adj = 1.9, cex = 1, col = "#000004FF")
+
+```
+
+
+## Lissage spatial (échelle de l'EPCI)
+
+### Lissage spatial des prix de l'immobilier au m² calculés à partir des valeurs agrégées par IRIS
+
+
+Avant de commencer les traitements sur le lissage spatial, il faut anticiper la prise en compte de l'effet de bord. Pour cela, nous avons fait le choix d élargir notre zone de traitement. Les communes frontalières à notre EPCI seront prisent en compte dans le lissage, puis un masque sera appliqué pour les cacher. Ainsi, les mutations situées à proximité des frontières seront intégrées à notre lissage.
+
+On commence par faire une liste de ces communes frontalières et on applique les mêmes calculs faits précédement à notre EPCI.
+```{r}
+#Liste des communes frontalières à celles de notre EPCI 
+listeCodeComFronta <- list(40273, 64004, 40120, 64215, 40212, 64040, 64412, 64458, 64310, 40312, 40271, 64241, 64025, 64291, 64334, 64029, 64253, 40306, 64494, 64039, 64480, 64481, 64083, 40231, 40268, 64251, 64529, 64217, 40206, 40251, 64186, 64178, 64244)
+Comm_Basque_Elargie <- IRIS_France %>%  filter(INSEE_COM %in% listeCodeComBasque |INSEE_COM %in% listeCodeComFronta)
+
+DVF_Elargie <- Comm_Basque_Elargie %>% st_join(Mutations_Aquit) %>% group_by(CODE_IRIS) %>% summarise(Prixm2 = mean(prixm2))
+
+# Calcul du nombre de mutations
+DVF_Elargie <- DVF_Elargie %>% mutate(Nbmutations = lengths(st_intersects(DVF_Elargie, Mutations_Aquit)))
+DVF_Elargie <- DVF_Elargie %>% na.omit() # pour supprimer les valeurs manquantes
+```
+
+#### Calcul des distances au plus proche voisin et de l'auto-corrélation spatiale des prix au m²
+
+```{r}
+# pour convertir la couche des IRIS au format spatial object (format requis par le package geoR)
+IRISDVF.sp <- as(DVF_Elargie, "Spatial")
+
+# pour calculer les centroïdes des IRIS (indispensable pour le calcul sur les plus proches voisins)
+IRISDVF.Centroids <- gCentroid(IRISDVF.sp,byid=TRUE)
+
+# pour récupérer les données initiales des IRIS sur les centroïdes
+IRISDVF.Centroids <- SpatialPointsDataFrame(IRISDVF.Centroids, IRISDVF.sp@data)
+
+# Calcul sur les plus proches voisins
+listPPV <- knearneigh(IRISDVF.Centroids@coords, k = 1) # pour connaître le plus proche voisin de chaque communes
+PPV <- knn2nb(listPPV, row.names = IRISDVF.Centroids$code_iris) # pour convertir l'objet knn en objet nb
+distPPV <- nbdists(PPV, IRISDVF.Centroids@coords) # pour connaître la distance entre plus proches voisins
+print(as.data.frame(t(as.matrix(summary(unlist(distPPV))))))
+hist(unlist(distPPV), breaks = 20,
+     main = "Distance au plus proche voisin",
+     col = "black", border = "white", xlab = "Distance", ylab = "Fréquence")
+
+# pour convertir les IRIS en objet nb
+IRIS.nb <- poly2nb(pl = DVF_Elargie,
+                 row.names = DVF_Elargie$code_iris,
+                 snap = 50,
+                 queen = TRUE)
+
+#calcul du test de Moran
+moran.test(DVF_Elargie$Prixm2, listw = nb2listw(IRIS.nb))
+
+```
+
+#### Carte lissée des prix de l'immobilier au m² calculés à partir des valeurs agrégées par IRIS sur l'ensemble de l'EPCI
+
+```{r, warning=FALSE}
+# pour définir le contour de notre EPCI comme emprise pour le lissage (sinon le lissage est calculé sur une fenêtre rectangulaire)
+EmpriseBasque <- as.owin(as(Comm_Basque_Elargie, "Spatial"))
+
+# pour récupérer les coordonnées du centroïde des IRIS
+pts <- st_coordinates(st_point_on_surface(st_geometry(DVF_Elargie)))
+
+# pour créer un objet ppp (format spatstat) et y intégrer dedans l'emprise et les valeurs à lisser (prix au m²)
+IRISDVF.ppp <- ppp(pts[,1], pts[,2], window = EmpriseBasque, marks = DVF_Elargie$Prixm2)
+
+# pour calculer la surface lissée (rayon lissage : 1 km et résolution spatiale de l'image : 1 ha)
+cartelissee <- Smooth(IRISDVF.ppp, sigma = 1000, weights = IRISDVF.ppp$marks, eps=100)
+
+# Conversion de la surface lissée au format raster
+cartelissee.raster <- raster(cartelissee, crs = st_crs(DVF_Elargie)[[2]])
+
+# découpage de la surface lissée sur l'emprise de mon EPCI
+cartelissee.raster <- mask(cartelissee.raster, IRISBasque) 
+
+# Paramétrage des marges de la fenêtre pour maximiser l'emprise de la carte
+par(mar = c(0, 0, 1.2, 0))
+
+# pour afficher la surface lissée et définir l'habillage
+# Calcul des seuils
+bks <- unique(getBreaks(values(cartelissee.raster), method = "q6"))
+
+# Création d'une palette de couleurs (double gradation harmonique)
+cols <- c("#2a9c4e", "#77c35c", "#c4e687", "#ffffc0", "#fec981", "#dc292c")
+
+# Affichage des communes de notre EPCI et celles aux alentours en arrière-plan et centrage de la carte sur le Pays Basque
+plot(st_geometry(Communes_Reg), lwd = 0.1, col = "grey90", border = "white", bg = "lightsteelblue1", xlim = c(st_bbox(IRISBasque)[1], st_bbox(IRISBasque)[3]), ylim = c(st_bbox(IRISBasque)[2], st_bbox(IRISBasque)[4]))
+
+#Affichage de l'Espagne
+plot(st_geometry(Espagne), lwd = 0.1, col = "grey95", border = "white", add = T)
+
+# Affichage de la carte lissée et du contour des IRIS
+plot(cartelissee.raster, breaks = bks, col=cols, add = T, legend=F)
+plot(IRISDVF$geometry, border = "grey60", lwd = 0.03, add = T)
+
+legendChoro(
+  pos = "bottomleft",
+  title.txt = "Prix moyen \nau m² (Euros)",
+  title.cex = 0.8,
+  breaks = bks, 
+  nodata = FALSE,
+  values.rnd = -1,
+  border = "white",
+  col = cols
+)
+
+layoutLayer(title = "Prix moyen au m² de l'immobilier au sein de la Communauté d'Agglomération du Pays Basque (2014-2022)", 
+            author = "          Sources : IGN et DGFip - Rayon : 1000 m, résolution : 1 ha - A partir des IRIS \n         Auteurs : Caroff M, Laumain A, Levesque J-C ; Sources : IGN et DGFip, 2022", 
+            scale = 10, frame = TRUE, col = "#cdd2d4", coltitle = "#8A5543", 
+            north(pos = "topleft"), tabtitle=TRUE, horiz = FALSE)
+
+# Ajouter les étiquettes des communes selectionnées plus haut
+labelLayer(Selection_Communes_Pays_Basque, txt = "com_name", halo = TRUE, bg = "white", r = 0.05, cex = 0.55, pos = 3, font = 3, offset = 0, overlap = TRUE)
+
+mtext(text = "Espagne", 
+      side = 3, line = -22, adj = 0.3, cex = 1, col = "#000004FF")
+```
+
+### Lissage spatial du prix de l'immobilier au m² calculés à partir des valeurs agrégées par section cadastrale
+
+On répète le même processus de prise en compte de l'effet de bord que pour les iris, à savoir, on élargie l'emprise de notre lissage puis on applique un masque.
+
+```{r}
+Sections_Elargie <- Sections %>%  filter(commune %in% listeCodeComBasque |commune %in% listeCodeComFronta) %>% mutate(codesection = id)
+
+#Calcul du nombre de mutations
+SectionsDVF_Elargie <- Sections_Elargie %>% st_join(Mutations_Aquit) %>% group_by(codesection) %>% summarise(Prixm2 = mean(prixm2))
+SectionsDVF_Elargie <- SectionsDVF_Elargie %>% mutate(Nbmutations = lengths(st_intersects(SectionsDVF_Elargie, Mutations_Aquit)))
+
+SectionsDVF_Elargie <- SectionsDVF_Elargie %>% na.omit() # pour supprimer les valeurs manquantes
+```
+
+#### Calcul des distances au plus proche voisin et de l'auto-corrélation spatiale des prix au m²
+
+```{r}
+# pour convertir la couche des sections au format spatial object (format requis par le package geoR)
+SectionsDVF.sp <- as(SectionsDVF_Elargie, "Spatial")
+
+# pour calculer les centroïdes des sections (indispensable pour le calcul sur les plus proches voisins)
+SectionsDVF.Centroids <- gCentroid(SectionsDVF.sp,byid=TRUE)
+
+# pour récupérer les données initiales des sections sur les centroïdes
+SectionsDVF.Centroids <- SpatialPointsDataFrame(SectionsDVF.Centroids, SectionsDVF.sp@data)
+
+# Calcul sur les plus proches voisins
+listPPV <- knearneigh(SectionsDVF.Centroids@coords, k = 1) # pour connaître le plus proche voisin de chaque Communes
+PPV <- knn2nb(listPPV, row.names = SectionsDVF.Centroids$codesection) # pour convertir l'objet knn en objet nb
+distPPV <- nbdists(PPV, SectionsDVF.Centroids@coords) # pour connaître la distance entre plus proches voisins
+print(as.data.frame(t(as.matrix(summary(unlist(distPPV))))))
+hist(unlist(distPPV), breaks = 20,
+     main = "Distance au plus proche voisin",
+     col = "black", border = "white", xlab = "Distance", ylab = "Fréquence")
+
+# pour convertir les sections en objet nb
+Section.nb <- poly2nb(pl = SectionsDVF_Elargie,
+                 row.names = SectionsDVF_Elargie$codesection,
+                 snap = 50,
+                 queen = TRUE)
+
+#calcul du test de Moran
+#moran.test(SectionsDVF_Elargie$Prixm2, listw = nb2listw(Section.nb))
+
+#En raison d'erreurs de topologie de la couche des sections cadastrales, le calcul de l'indice de Moran est impossible.
+```
+
+#### Carte lissée des prix de l'immobilier au m² calculés à partir des valeurs agrégées par section cadastrale sur l'ensemble de notre EPCI
+
+```{r}
+# pour définir le contour de l'EPCI comme emprise pour le lissage (sinon le lissage est calculé sur une fenêtre rectangulaire)
+EmpriseBasque <- as.owin(as(Sections_Elargie, "Spatial"))
+
+# pour récupérer les coordonnées du centroïde des sections
+pts <- st_coordinates(st_point_on_surface(st_geometry(SectionsDVF_Elargie)))
+
+# pour créer un objet ppp (format spatstat) et y intégrer dedans l'emprise et les valeurs à lisser (prix au m²)
+Sections.ppp <- ppp(pts[,1], pts[,2], window = EmpriseBasque, marks = SectionsDVF_Elargie$Prixm2)
+
+# pour calculer la surface lissée (rayon lissage : 2 km et résolution spatiale de l'image : 3 ha)
+cartelissee <- Smooth(Sections.ppp, sigma = 2000, weights = Sections.ppp$marks, eps=300)
+
+# Conversion de la surface lissée au format raster
+cartelissee.raster <- raster(cartelissee, crs = st_crs(SectionsDVF_Elargie)[[2]])
+
+# découpage de la surface lissée sur l'emprise de mon EPCI
+cartelissee.raster <- mask(cartelissee.raster, SectionsEPCI) 
+
+# Paramétrage des marges de la fenêtre pour maximiser l'emprise de la carte
+par(mar = c(0, 0, 1.2, 2))
+
+# pour afficher la surface lissée et définir l'habillage
+# Calcul des seuils
+bks <- unique(getBreaks(values(cartelissee.raster), method = "q6"))
+
+# Création d'une palette de couleurs (double gradation harmonique)
+cols <- c("#2a9c4e", "#77c35c", "#c4e687", "#ffffc0", "#fec981", "#dc292c")
+
+# Affichage des communes de notre EPCI et celles aux alentours en arrière-plan et centrage de la carte sur le Pays Basque
+plot(st_geometry(Communes_Reg), lwd = 0.1, col = "grey90", border = "white", bg = "lightsteelblue1", xlim = c(st_bbox(SectionsEPCI)[1], st_bbox(SectionsEPCI)[3]), ylim = c(st_bbox(SectionsEPCI)[2], st_bbox(SectionsEPCI)[4]))
+
+#Affichage de l'Espagne
+plot(st_geometry(Espagne), lwd = 0.1, col = "grey95", border = "white", add = T)
+
+# Affichage de la carte lissée et du contour des sections
+plot(cartelissee.raster, breaks = bks, col=cols, add = T, legend=F)
+plot(SectionsEPCI$geometry, border = "grey60", lwd = 0.01, add = T)
+
+legendChoro(
+  pos = "bottomleft",
+  title.txt = "Prix moyen \nau m² (Euros)",
+  title.cex = 0.8,
+  breaks = bks, 
+  nodata = FALSE,
+  values.rnd = -1,
+  border = "white",
+  col = cols
+)
+
+layoutLayer(title = "Prix moyen au m² de l'immobilier au sein de la Communauté d'Agglomération du Pays Basque (2014-2022)", 
+            author = "          Sources : IGN et DGFip - Rayon : 2000 m, résolution : 3 ha - A partir des sections \n         Auteurs : Caroff M, Laumain A, Levesque J-C ; Sources : IGN et DGFip, 2022",
+            scale = 5, frame = TRUE, col = "#cdd2d4", coltitle = "#8A5543", 
+            north(pos = "topleft"), tabtitle=TRUE, horiz = FALSE)
+
+# Ajouter les étiquettes des communes sélectionnées plus haut
+labelLayer(Selection_Communes_Pays_Basque, txt = "com_name", halo = TRUE, bg = "white", r = 0.05, cex = 0.55, pos = 3, font = 3, offset = 0, overlap = TRUE)
+
+mtext(text = "Espagne", 
+      side = 3, line = -22, adj = 0.3, cex = 1, col = "#000004FF")
+```
+
+### Lissage spatial des prix de l'immobilier au m² calculés directement à partir des mutations immobilières sur l'ensemble de l'EPCI
+
+#### Calcul de la distance au plus proche voisin et de l'auto-corrélation spatiale des prix au m²
+
+```{r warning=FALSE}
+# pour convertir les mutations en objet spatial (format requis par le package geoR)
+MutationsBasque.sp <- as(MutationsBasques, "Spatial")
+
+# Calcul sur les plus proches voisins
+listPPV <- knearneigh(MutationsBasque.sp@coords, k = 1) # pour connaître le plus proche voisin de chaque mutation
+PPV <- knn2nb(listPPV, row.names = MutationsBasque.sp$id) # pour convertir l'objet knn en objet nb
+distPPV <- nbdists(PPV, MutationsBasque.sp@coords) # pour connaître la distance entre plus proches voisins
+print(as.data.frame(t(as.matrix(summary(unlist(distPPV))))))
+hist(unlist(distPPV), nclass = 600,
+     main = "Distance au plus proche voisin",
+     col = "black", border = "white", xlab = "Distance", ylab = "Fréquence", xlim = c(0,150))
+
+#calcul du test de Moran
+moran.test(MutationsBasque.sp$prixm2, listw = nb2listw(PPV))
+```
+
+
+#### Carte lissée des prix de l'immobilier au m² calculés directement à partir des mutations immobilières sur l'ensemble de l'EPCI
+
+```{r warning=FALSE}
+# Si nécessaire,  convertir les mutations en objet spatial (format requis par le package geoR)
+Mutations_Aquitsp <- as(Mutations_Aquit, "Spatial")
+
+# pour définir comme emprise pour le lissage, l'étendue de l'EPCI avec une zone tampon de 0,5 km autour afin d'englober les mutations limitrophes et réduire l'effet de bord
+EmpriseEPCI.ZT <- as.owin(as(st_union(st_buffer(IRISBasque, 1000)), "Spatial"))
+
+# pour créer un objet ppp (format spatstat) et y intégrer dedans l'emprise et les valeurs à lisser (prix moyen au m²)
+# NB : on considère dans un premier temps les mutations sur l'ensemble des deux départements, et on ne retient que celles qui sont incluses dans l'emprise créée à l'étape précédente
+Mutations_Aquit.ppp <- ppp(Mutations_Aquitsp@coords[,1], Mutations_Aquitsp@coords[,2], window = EmpriseEPCI.ZT, marks = Mutations_Aquit$prixm2)
+
+# pour calculer la surface lissée (rayon lissage : 0,5 km et résolution spatiale de l'image : 1 ha) --> calcul long
+cartelissee <- Smooth(Mutations_Aquit.ppp, sigma = 500, weights = Mutations_Aquit$marks, eps=100)
+
+# Conversion de la surface lissée au format raster
+cartelissee.raster <- raster(cartelissee, crs = st_crs(MutationsBasques)[[2]])
+
+# découpage de la surface lissée sur l'emprise de l'EPCI
+cartelissee.raster <- mask(cartelissee.raster, IRISBasque) 
+
+# Paramétrage des marges de la fenêtre pour maximiser l'emprise de la carte
+par(mar = c(0, 0, 1.2, 0))
+
+# pour afficher la surface lissée et définir l'habillage de la carte
+# Calcul des seuils
+bks <- unique(getBreaks(values(cartelissee.raster), method = "q6"))
+
+# Création d'une palette de couleurs (double gradation harmonique)
+cols <- c("#2a9c4e", "#77c35c", "#c4e687", "#ffffc0", "#fec981", "#dc292c")
+
+# Affichage des communes de notre EPCI et celles aux alentours en arrière-plan et centrage de la carte sur le Pays Basque
+plot(st_geometry(Communes_Reg), lwd = 0.1, col = "grey90", border = "white", bg = "lightsteelblue1", xlim = c(st_bbox(SectionsEPCI)[1], st_bbox(SectionsEPCI)[3]), ylim = c(st_bbox(SectionsEPCI)[2], st_bbox(SectionsEPCI)[4]))
+
+#Affichage de l'Espagne
+plot(st_geometry(Espagne), lwd = 0.1, col = "grey95", border = "white", add = T)
+
+# Affichage de la carte lissée et du contour des IRIS
+plot(cartelissee.raster, breaks = bks, col=cols, add = T, legend=F)
+plot(IRISBasque$geometry, border = "grey60", lwd = 0.05, lty=3, add = T)
+
+legendChoro(
+  pos = "bottomleft",
+  title.txt = "Prix moyen \nau m² (Euros)",
+  title.cex = 0.8,
+  breaks = bks, 
+  nodata = FALSE,
+  values.rnd = -1,
+  border = "white",
+  col = cols
+)
+
+layoutLayer(title = "Prix moyen au m² de l'immobilier au sein de la Communauté d'Agglomération du Pays Basque (2014-2022)", 
+            author = "          Sources : IGN et DGFip - Rayon : 500 m, résolution : 1 ha - A partir des mutations \n         Auteurs : Caroff M, Laumain A, Levesque J-C ; Sources : IGN et DGFip, 2022",
+            scale = 10, frame = TRUE, col = "#cdd2d4", coltitle = "#8A5543", 
+            north(pos = "topleft"), tabtitle=TRUE, horiz = FALSE)
+
+# Ajout des étiquettes des communes selectionnées plus haut
+labelLayer(Selection_Communes_Pays_Basque, txt = "com_name", halo = TRUE, bg = "white", r = 0.05, cex = 0.55, pos = 3, font = 3, offset = 0, overlap = TRUE)
+
+mtext(text = "Espagne", 
+      side = 3, line = -22, adj = 0.3, cex = 1, col = "#000004FF")
+```
+
+
+## Elaboration d'une typologie à partir d'indicateurs immobiliers et cartographie des sous-marchés associés
+
+### Transfert d'attributs des IRIS vers les mutations (jointure spatiale)  
+```{r}
+MutationsIRIS <- MutationsBasques %>% st_join(IRISBasque)
+MutationsIRIS <- as.data.frame(MutationsIRIS)
+
+```
+
+### Création d'un tableau avec les variables par IRIS à soumettre à la CAH
+```{r}
+IRISDVFClassif1 <- MutationsIRIS %>% group_by(CODE_IRIS) %>%
+  summarise(Nbtransactions = n(),
+            Prixmoyen = mean(prix),
+            Prixm2moyen = mean(prixm2),
+            Surfacemoyenne = mean(surface),
+            PropMaison = length(type[type=="Maison"])/Nbtransactions*100,
+            PropAppart = length(type[type=="Appartement"])/Nbtransactions*100)
+
+IRISDVFClassif <- data.frame(IRISDVFClassif1[, c("Nbtransactions", "Prixmoyen", "Prixm2moyen", "Surfacemoyenne", "PropMaison", "PropAppart")])
+```
+
+### Centrage et réduction des variables
+```{r}
+IRISDVFClassifscale <- scale(IRISDVFClassif)
+```
+
+### Mise en oeuvre de la CAH
+```{r}
+CAHIRIS <- agnes(IRISDVFClassifscale,
+                     metric = "euclidean",
+                     method = "ward")
+```
+
+### Graphiques des gains d'inertie inter-classe
+```{r}
+sortedHeight<- sort(CAHIRIS$height,decreasing= TRUE)
+relHeight<-sortedHeight/ sum(sortedHeight)*100
+cumHeight<- cumsum(relHeight)
+
+barplot(relHeight[1:30],names.arg=seq(1, 30, 1),col= "black",border= "white",xlab= "Noeuds",ylab= "Part de l'inertie totale (%)")
+barplot(cumHeight[1:30],names.arg=seq(1, 30, 1),col= "black",border= "white",xlab= "Nombre de classes",ylab= "Part de l'inertie totale (%)")
+```
+
+### Arbre de classification hiérarchique (dendrogramme)
+```{r}
+dendroCSP <- as.dendrogram(CAHIRIS)
+plot(dendroCSP, leaflab = "none")
+```
+
+### Partition (en n classes)
+```{r}
+clusIRIS <- cutree(CAHIRIS, k = 5)
+IRISCluster <- as.data.frame(IRISDVFClassif1)
+IRISCluster$CLUSIMMO <- factor(clusIRIS,
+                                   levels = 1:5,
+                                   labels = paste("Classe", 1:5))
+```
+
+### Création d'un tableau avec les caractéristiques des groupes
+```{r}
+RecapCAHIRIS <- IRISCluster %>% group_by(CLUSIMMO) %>% summarise(NB= n(), NbTransac = mean(Nbtransactions), Prixmoyen = mean(Prixmoyen), Prixm2 = mean(Prixm2moyen), Surface=mean(Surfacemoyenne), PropMaison = mean(PropMaison), PropAppart= mean(PropAppart))
+
+print(RecapCAHIRIS)
+```
+
+### Graphique des écarts à la moyenne
+```{r}
+SyntheseCAHIRIS <- RecapCAHIRIS %>% mutate(
+  nbtransacmoy = mean(IRISDVFClassif$Nbtransactions),
+  surfacemoy = mean(IRISDVFClassif$Surfacemoyenne),
+  prixmoy = mean(IRISDVFClassif$Prixmoyen),
+  prixm2moyen = mean(IRISDVFClassif$Prixm2moyen),
+  propmaisonmoyen = mean(IRISDVFClassif$PropMaison),
+  propappartmoyen = mean(IRISDVFClassif$PropAppart),
+  NbMutations=(NbTransac- nbtransacmoy)/nbtransacmoy*100,
+  Prix=(Prixmoyen- prixmoy)/prixmoy*100,
+  Prixm2=(Prixm2- prixm2moyen)/prixm2moyen*100,
+  Surface=(Surface- surfacemoy)/surfacemoy*100,
+  PropMaison=(PropMaison- propmaisonmoyen)/propmaisonmoyen*100,
+  PropAppart=(PropAppart- propappartmoyen)/propappartmoyen*100
+)
+
+# pour créer un nouveau tableau avec une sélection de colonnes à faire apparaître sur le graphique
+SyntheseCAHIRIS <- data.frame(SyntheseCAHIRIS[, c("CLUSIMMO", "NbMutations", "Surface", "Prix", "Prixm2", "PropMaison", "PropAppart")])
+
+gather <- SyntheseCAHIRIS %>% gather(key=variable, value= "value", NbMutations:PropAppart)
+
+ggplot(gather, aes(x=variable, y=value, fill=CLUSIMMO)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  scale_fill_manual(values=c("#2A9D8F","#264653","#fcbf49","#e45c3a","#0074D9")) +
+  ylab("Variation par rapport à la moyenne de l'EPCI (%)") +
+  theme_bw() +
+  theme(legend.position = "none") +
+  facet_wrap(~CLUSIMMO, ncol = 1)
+```
+
+### Carte de la typologie montrant les sous-marchés immobiliers 
+```{r}
+# pour joindre le résultat de la typologie dans la couche des IRIS
+IRISDVFCAH <- left_join(IRISBasque, IRISCluster, by= "CODE_IRIS")
+
+# Paramétrage des marges de la fenêtre pour maximiser l'emprise de la carte
+par(mar = c(0, 0, 1.2, 0))
+
+# pour afficher la surface lissée et définir l'habillage de la carte
+# Calcul des seuils
+bks <- unique(getBreaks(values(cartelissee.raster), method = "q6"))
+
+# Création d'une palette de couleurs (double gradation harmonique)
+cols <- c("#2a9c4e", "#77c35c", "#c4e687", "#ffffc0", "#fec981", "#dc292c")
+
+# Affichage des communes de notre EPCI et celles aux alentours en arrière-plan et centrage de la carte sur le Pays Basque
+plot(st_geometry(Communes_Reg), lwd = 0.1, col = "grey90", border = "white", bg = "lightsteelblue1", xlim = c(st_bbox(IRISBasque)[1], st_bbox(IRISBasque)[3]), ylim = c(st_bbox(IRISBasque)[2], st_bbox(IRISBasque)[4]))
+
+#Affichage de l'Espagne
+plot(st_geometry(Espagne), lwd = 0.1, col = "grey95", border = "white", add = T)
+
+# Affichage de la typologie et du contour des IRIS
+typoLayer(
+  x = IRISDVFCAH,
+  var="CLUSIMMO",
+  col = c("#2A9D8F","#264653","#fcbf49","#e45c3a","#0074D9"),
+  lwd = 0.05,
+  border = "grey70",
+  legend.values.order = c("Classe 1",
+                          "Classe 2",
+                          "Classe 3",
+                          "Classe 4",
+                          "Classe 5"),
+  legend.pos = "bottomleft",
+  legend.title.txt = "Sous-marchés \nimmobiliers",
+  legend.title.cex = 0.8,
+  legend.nodata = "Aucune mutation",
+  add = TRUE)
+
+layoutLayer(title = "Sous-marchés immobiliers au sein de la Communauté d'Agglomération du Pays Basque (2014-2022)", 
+            author = "          Sources : IGN et DGFip - Typologie obtenue par CAH\n         Auteurs : Caroff M, Laumain A, Levesque J-C ; Sources : IGN et DGFip, 2022", 
+            scale = 10, frame = TRUE, col = "#cdd2d4", coltitle = "#8A5543", 
+            north(pos = "topleft"), tabtitle=TRUE, horiz = FALSE)
+
+
+# Ajout des étiquettes des communes selectionnées plus haut
+labelLayer(Selection_Communes_Pays_Basque, txt = "com_name", halo = TRUE, bg = "white", r = 0.05, cex = 0.55, pos = 3, font = 3, offset = 0, overlap = TRUE)
+
+mtext(text = "Espagne", 
+      side = 3, line = -22, adj = 0.3, cex = 1, col = "#000004FF")
+
+```
+
+### Export des IRIS contenant la typologie issue de la CAH au format geopackage (pour une utilisation dans un SIG par exemple)
+
+```{r message=FALSE, warning=FALSE, include=TRUE, eval=FALSE}
+st_write(IRISDVFCAH, "IRISDVFCAH.gpkg", append = FALSE)
+```
+
+
+
+## Lissage spatial des prix au m² des appartements entre 2014 et 2022 : zoom sur les communes de Biarritz, Anglet et Bayonne
+
+### Préparation du jeu de données
+
+```{r}
+# pour ne garder que les commmunes qui nous intéresse
+Com_atlas <- Communes_Reg %>% filter(com_code == "64024" | com_code == "64102" |com_code == "64122")
+
+# pour ne garder que les mutations correspondant à des appartements dans l'EPCI (dans un premier temps)
+MutationsApptAtlas <- MutationsBasques %>% filter(type == "Appartement")
+
+# pour créer une liste d'années, dans l'ordre
+MutationsApptAtlas<-MutationsApptAtlas[order(MutationsApptAtlas$annee, decreasing = FALSE), ]
+ListAnnees <- unique(MutationsApptAtlas$annee)
+```
+
+### Série de cartes lissées montrant l'évolution des prix au m² des appartements calculés directement à partir des mutations entre 2014 et 2022
+```{r warning=FALSE, error=FALSE}
+# pour définir comme emprise pour le lissage, l'étendue des 3 communes avec une zone tampon de 0,5 km autour afin d'englober les mutations limitrophes et réduire l'effet de bord
+EmpriseAtlas <- as.owin(as(st_union(st_buffer(Com_atlas, 500)), "Spatial"))
+
+# Paramétrage des marges pour insérer le titre général et les titres de chaque carte
+par(oma=c(3.5,0,3,0)+0.1, mar = c(0, 0.5, 1.2, 0.5))
+
+plot.new()
+
+# pour découper la fenêtre en 3 lignes et 3 colonnes (9 années)
+par(mfrow=c(3,3))
+
+# boucle pour produire et cartographier une surface lissée par année
+for (i in ListAnnees){
+  
+  # Nommage des dataframes
+  name<- paste("PrixM2_Appt_Biarritz_Anglet_Bayonne",i, sep="-")
+  
+  # Récuperation des jeux de données par année
+  b<-assign(name, MutationsApptAtlas[which(MutationsApptAtlas$annee == i),]) # La fonction assign permet d'assigner un nom à une valeur/un élément
+  fichier<-get(name)
+  
+  # pour récupérer les coordonnées des mutations
+  pts <- st_coordinates(st_geometry(fichier))
+  
+  # pour créer un objet ppp (format spatstat) et y intégrer dans l'emprise les valeurs à lisser (prix au m²)
+  fichier.ppp <- ppp(pts[,1], pts[,2], window = EmpriseAtlas, marks = fichier$prixm2)
+  
+  # pour calculer la surface lissée (rayon lissage : 500 m et résolution spatiale de l'image : 1000m²)
+  cartelissee <- Smooth(fichier.ppp, sigma = 500, weights = fichier.ppp$marks, eps=sqrt(1000))
+  
+  # Conversion de la surface lissée au format raster
+  cartelissee.raster <- raster(cartelissee, crs = st_crs(Com_atlas)[[2]])
+  cartelissee.raster <- mask(cartelissee.raster, Com_atlas) # découpage sur l'emprise de nos communes
+  
+  # Définition manuelle des seuils
+  bks <- c(cellStats(cartelissee.raster, stat='min'), 3250, 3500, 4250, 4750, 5500, 6000, 7500, 9000, cellStats(cartelissee.raster, stat='max'))
+
+  # Création d'une palette de couleurs (double gradation harmonique)
+  cols <- c("#FFBA08", "#FAA307", "#F48C06", "#E85D04", "#DC2F02", "#D00000", "#9D0208", "#6A040F", "#370617", "#03071E")
+
+  # reclassification de la surface lissée
+  cartelissee.reclass <- cut(cartelissee.raster, breaks = bks)
+  
+  # vectorisation de la surface reclassée (calcul un peu long)
+  cartelissee.vecteur <- as(rasterToPolygons(cartelissee.reclass, n=4, na.rm=TRUE, digits=12, dissolve=TRUE), "sf")
+  
+  # Tracer de la carte
+  plot(st_geometry(Com_atlas), border = "white", bg= "lightsteelblue1")
+  plot(st_geometry(Communes_Reg), border = NA, col = "grey90", add = T)
+
+  
+  typoLayer(
+    x = cartelissee.vecteur,
+    var="layer",
+    col = cols,
+    lwd = 0.1,
+    border = cols,
+    legend.pos = "n",
+    add = TRUE)
+  
+  plot(st_geometry(Communes_Reg), border = "white", add = T)
+
+  title(main =paste("",i, sep=""))
+  
+}
+
+barscale(
+  lwd = 1.5,
+  cex = 0.6,
+  pos = "bottomleft",
+  style = "pretty",
+  unit = "m"
+)
+
+north(pos = "topleft")
+
+# Pour afficher le titre principal et la source
+mtext("Evolution du prix moyen (en €)  au m² des appartements à Bayonne, Anglet, et Biarritz, de 2014 à 2022", cex = 0.9, side=3,line=1,adj=0.5,outer=TRUE)
+mtext("   Sources : IGN et DGFip - Rayon de lissage : 500 m et résolution : 1000 m²", side=1, line=1, adj=0, cex=0.6, outer=TRUE)
+mtext("   Auteurs : Caroff M, Laumain A, Levesque J-C", side=1, line=2, adj=0, cex=0.6, outer=TRUE)
+
+# Overlay the entire figure region with a new, single plot. 
+par(fig = c(0, 1, 0, 1), oma = c(0, 0, 0, 0), mar = c(0, 0, 0, 0), new = TRUE)
+plot(0, 0, type = "n", bty = "n", xaxt = "n", yaxt = "n")
+
+
+# Ajout des étiquettes des communes sélectionnées plus haut
+labelLayer(Selection_Communes_Pays_Basque_Carton, txt = "com_name", halo = TRUE, bg = "white", r = 0.05, cex = 0.6, pos = 3, font = 3, offset = 0, overlap = TRUE)
+
+# Then call legend with the location ("bottom", "right", "bottomright", etc.)
+
+legendChoro( pos = "bottomright",
+             title.txt = "",
+             breaks = bks, 
+             nodata = FALSE,
+             values.rnd = -1, 
+             col = cols, 
+             border = "white", 
+             horiz = TRUE)
+
+```
+
+
+
+
+
